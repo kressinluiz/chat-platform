@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 )
 
 func ServeIndex(w http.ResponseWriter, r *http.Request) {
@@ -20,30 +23,41 @@ const MessageSizeLimit = 4096 //4KB
 const ClientBufferSize = 256  //256 messages
 const ServerAddress = "localhost:8080"
 
+const HistoryLimit = 50
+
 type Hub struct {
 	clients    map[*Client]bool
 	broadcast  chan Message
 	register   chan *Client
 	unregister chan *Client
+	logger     *slog.Logger
+	msgRepo    *MessageRepository
 }
 
 type Message struct {
 	Content     []byte
 	MessageType int
+	RoomID      string
+	UserID      string
+	TextContent string
 }
 
 type MessageContent struct {
 	Username  string `json:"username"`
+	UserID    string `json:"user_id"`
+	RoomID    string `json:"room_id"`
 	Text      string `json:"text"`
 	Timestamp int64  `json:"timestamp"`
 }
 
-func NewHub() *Hub {
+func NewHub(msgRepo *MessageRepository) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan Message),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		logger:     slog.Default().With("component", "hub"),
+		msgRepo:    msgRepo,
 	}
 }
 
@@ -70,6 +84,15 @@ func (h *Hub) Run() {
 					delete(h.clients, client)
 				}
 			}
+
+			go func(msg Message) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				if err := h.msgRepo.Save(ctx, msg.RoomID, msg.UserID, msg.TextContent); err != nil {
+					h.logger.Error("failed to save message", "error", err)
+				}
+			}(message)
 		}
 	}
 }
@@ -79,6 +102,9 @@ type Client struct {
 	receivedMessages chan Message
 	hub              *Hub
 	Username         string
+	RoomID           string
+	UserID           string
+	logger           *slog.Logger
 }
 
 func (c *Client) ReadRoutine() {
@@ -91,27 +117,44 @@ func (c *Client) ReadRoutine() {
 
 	_, usernameBytes, err := c.conn.ReadMessage()
 	if err != nil {
-		log.Println(err)
+		c.logger.Warn("failed to read username", "error", err)
 		return
 	}
 	username := strings.TrimSpace(string(usernameBytes))
 	if username == "" || len(username) > 20 {
-		log.Println("Username cannot be empty")
+		c.logger.Warn("invalid username", "username", username)
 		return
 	}
 	c.Username = username
+	c.RoomID = "35e699ad-b7a2-46e2-9945-29d8c201a2de"
+	c.UserID = "cae24c7c-497b-44ca-bd31-2d4a67bb6797"
+	c.logger = c.logger.With("username", username)
+	c.logger.Info("client connected")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	history, err := c.hub.msgRepo.GetHistory(ctx, c.RoomID, HistoryLimit)
+	if err != nil {
+		c.logger.Error("failed to load message history", "error", err)
+	} else {
+		c.SendHistory(history)
+	}
 
 	for {
 		messageType, content, err := c.conn.ReadMessage()
 		if err != nil {
-			log.Println(err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				c.logger.Error("unexpected close error", "error", err)
+			} else {
+				c.logger.Info("client disconnected", "error", err)
+			}
 			break
 		}
 
 		var messageContent MessageContent
 		err = json.Unmarshal(content, &messageContent)
 		if err != nil {
-			log.Println(err)
+			c.logger.Warn("failed to unmarshal message", "error", err)
 			continue
 		}
 
@@ -119,12 +162,15 @@ func (c *Client) ReadRoutine() {
 		messageContent.Username = c.Username
 		content, err = json.Marshal(messageContent)
 		if err != nil {
-			log.Println(err)
+			c.logger.Error("failed to marshal message", "error", err)
 			continue
 		}
 		message := Message{
 			Content:     content,
 			MessageType: messageType,
+			RoomID:      c.RoomID,
+			UserID:      c.UserID,
+			TextContent: messageContent.Text,
 		}
 		c.hub.broadcast <- message
 	}
@@ -145,14 +191,14 @@ loop:
 			}
 			c.conn.SetWriteDeadline(time.Now().Add(DeadlineInterval))
 			if err := c.conn.WriteMessage(message.MessageType, message.Content); err != nil {
-				log.Println(err)
+				c.logger.Error("failed to write message", "error", err)
 				return
 			}
 		case _ = <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(DeadlineInterval))
 			err := c.conn.WriteMessage(websocket.PingMessage, nil)
 			if err != nil {
-				log.Println(err)
+				c.logger.Error("failed to send ping", "error", err)
 				return
 			}
 		}
@@ -160,6 +206,26 @@ loop:
 
 	c.conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
 	c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "ws closed"))
+}
+
+func (c *Client) SendHistory(messages []StoredMessage) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		messageContent := MessageContent{
+			Username:  msg.Username,
+			Text:      msg.Content,
+			Timestamp: msg.CreatedAt.UnixMilli(),
+		}
+		content, err := json.Marshal(messageContent)
+		if err != nil {
+			c.logger.Error("failed to marshal history message", "error", err)
+			continue
+		}
+		c.receivedMessages <- Message{
+			Content:     content,
+			MessageType: websocket.TextMessage,
+		}
+	}
 }
 
 func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, upgrader websocket.Upgrader) {
@@ -173,6 +239,7 @@ func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, upgrader websoc
 		conn:             conn,
 		receivedMessages: make(chan Message, ClientBufferSize),
 		hub:              hub,
+		logger:           slog.Default().With("component", "client"),
 	}
 
 	hub.register <- &client
@@ -181,8 +248,58 @@ func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, upgrader websoc
 	go client.WriteRoutine()
 }
 
+func configLogger() {
+	levelMap := map[string]slog.Level{
+		"debug": slog.LevelDebug,
+		"info":  slog.LevelInfo,
+		"warn":  slog.LevelWarn,
+		"error": slog.LevelError,
+	}
+
+	logLevel, ok := levelMap[strings.ToLower(os.Getenv("LOG_LEVEL"))]
+	if !ok {
+		logLevel = slog.LevelInfo
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevel,
+	}))
+
+	slog.SetDefault(logger)
+}
+
 func main() {
-	hub := NewHub()
+
+	err := godotenv.Load()
+	if err != nil {
+		slog.Warn("no .env file found, reading from environment")
+	}
+
+	configLogger()
+
+	db, err := NewDB(
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_PORT"),
+		os.Getenv("DB_USER"),
+		os.Getenv("DB_PASSWORD"),
+		os.Getenv("DB_NAME"),
+	)
+	if err != nil {
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if err := RunMigrations(db); err != nil {
+		slog.Error("failed to run migrations", "error", err)
+		os.Exit(1)
+	}
+
+	slog.Info("database connected and migrations applied")
+
+	msgRepo := NewMessageRepository(db)
+
+	hub := NewHub(msgRepo)
 	go hub.Run()
 
 	var upgrader = websocket.Upgrader{
@@ -196,6 +313,7 @@ func main() {
 	})
 	router.HandleFunc("GET /", ServeIndex)
 	if err := http.ListenAndServe(ServerAddress, router); err != nil {
-		log.Fatalf("HTTP Server Error: %s", err.Error())
+		slog.Error("http server error", "error", err)
+		os.Exit(1)
 	}
 }
