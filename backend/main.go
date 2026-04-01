@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"log/slog"
+	"os"
 
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,6 +19,20 @@ func DevLoadEnv() {
 func main() {
 	DevLoadEnv()
 	ConfigLogger()
+
+	ctx := context.Background()
+	tracerProvider, err := InitTracer(ctx)
+	if err != nil {
+		slog.Error("failed to initialize tracer", "error", err)
+		os.Exit(1)
+
+	}
+	defer func() {
+		if err := tracerProvider.Shutdown(ctx); err != nil {
+			slog.Error("failed to shutdown tracer provider", "error", err)
+		}
+	}()
+
 	db := CreateDBAndRunMigrations()
 	defer db.Close()
 	msgRepo := NewMessageRepository(db)

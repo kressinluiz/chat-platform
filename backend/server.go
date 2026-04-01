@@ -16,13 +16,13 @@ func RegisterRoutes(hub *Hub, userRepo *UserRepository, roomRepo *RoomRepository
 	}
 
 	router := http.NewServeMux()
-	router.Handle("/login", PrometheusMiddleware(http.HandlerFunc(Login(userRepo)), "/login"))
-	router.Handle("/register", PrometheusMiddleware(http.HandlerFunc(Register(userRepo)), "/register"))
-	router.Handle("/ws", PrometheusMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	router.Handle("/login", TracingMiddleware(PrometheusMiddleware(http.HandlerFunc(Login(userRepo)), "/login"), "login"))
+	router.Handle("/register", TracingMiddleware(PrometheusMiddleware(http.HandlerFunc(Register(userRepo)), "/register"), "register"))
+	router.Handle("/ws", TracingMiddleware(PrometheusMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		WebSocket(w, r, hub, roomRepo, upgrader)
-	}), "/ws"))
-	router.Handle("POST /rooms", PrometheusMiddleware(AuthMiddleware(http.HandlerFunc(CreateRoom(roomRepo))), "/rooms"))
-	router.Handle("GET /rooms", PrometheusMiddleware(AuthMiddleware(http.HandlerFunc(ListRooms(roomRepo))), "/rooms"))
+	}), "ws"), "ws"))
+	router.Handle("POST /rooms", TracingMiddleware(PrometheusMiddleware(AuthMiddleware(http.HandlerFunc(CreateRoom(roomRepo))), "/rooms"), "create_room"))
+	router.Handle("GET /rooms", TracingMiddleware(PrometheusMiddleware(AuthMiddleware(http.HandlerFunc(ListRooms(roomRepo))), "/rooms"), "list_rooms"))
 
 	fs := http.FileServer(http.Dir("./frontend"))
 	router.Handle("/", fs)

@@ -5,7 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
+
+var tracer = otel.Tracer("chat/repository")
 
 type RoomRepository struct {
 	db *sql.DB
@@ -48,6 +53,9 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 }
 
 func (r *RoomRepository) Create(ctx context.Context, name string) (Room, error) {
+	ctx, span := tracer.Start(ctx, "RoomRepository.Create")
+	defer span.End()
+	span.SetAttributes(attribute.String("room_name", name))
 	query := `
         INSERT INTO rooms (name)
         VALUES ($1)
@@ -56,12 +64,15 @@ func (r *RoomRepository) Create(ctx context.Context, name string) (Room, error) 
 	var room Room
 	err := r.db.QueryRowContext(ctx, query, name).Scan(&room.ID, &room.Name, &room.CreatedAt)
 	if err != nil {
+		span.RecordError(err)
 		return Room{}, fmt.Errorf("failed to create room: %w", err)
 	}
 	return room, nil
 }
 
 func (r *RoomRepository) List(ctx context.Context) ([]Room, error) {
+	ctx, span := tracer.Start(ctx, "RoomRepository.List")
+	defer span.End()
 	query := `
         SELECT id, name, created_at
         FROM rooms
@@ -69,6 +80,7 @@ func (r *RoomRepository) List(ctx context.Context) ([]Room, error) {
     `
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf("failed to list rooms: %w", err)
 	}
 	defer rows.Close()
@@ -77,29 +89,25 @@ func (r *RoomRepository) List(ctx context.Context) ([]Room, error) {
 	for rows.Next() {
 		var room Room
 		if err := rows.Scan(&room.ID, &room.Name, &room.CreatedAt); err != nil {
+			span.RecordError(err)
 			return nil, fmt.Errorf("failed to scan room: %w", err)
 		}
 		rooms = append(rooms, room)
 	}
 
 	if err := rows.Err(); err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf("failed to iterate rooms: %w", err)
 	}
 
 	return rooms, nil
 }
 
-func (r *RoomRepository) GetByID(ctx context.Context, id string) (bool, error) {
-	query := `SELECT EXISTS(SELECT 1 FROM rooms WHERE id = $1)`
-	var exists bool
-	err := r.db.QueryRowContext(ctx, query, id).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("failed to check room: %w", err)
-	}
-	return exists, nil
-}
-
 func (r *UserRepository) Create(ctx context.Context, username, hashedPassword string) (string, error) {
+	ctx, span := tracer.Start(ctx, "UserRepository.Create")
+	defer span.End()
+	span.SetAttributes(attribute.String("username", username))
+
 	query := `
 		INSERT INTO users (username, password)
 		VALUES ($1, $2)
@@ -108,12 +116,17 @@ func (r *UserRepository) Create(ctx context.Context, username, hashedPassword st
 	var id string
 	err := r.db.QueryRowContext(ctx, query, username, hashedPassword).Scan(&id)
 	if err != nil {
+		span.RecordError(err)
 		return "", fmt.Errorf("failed to create user: %w", err)
 	}
 	return id, nil
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (string, string, error) {
+	ctx, span := tracer.Start(ctx, "UserRepository.GetByUsername")
+	defer span.End()
+	span.SetAttributes(attribute.String("username", username))
+
 	query := `
 		SELECT id, password
 		FROM users
@@ -125,13 +138,33 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (st
 		return "", "", nil
 	}
 	if err != nil {
+		span.RecordError(err)
 		return "", "", fmt.Errorf("failed to get user: %w", err)
 	}
 	return id, hashedPassword, nil
 
 }
 
+func (r *RoomRepository) GetByID(ctx context.Context, id string) (bool, error) {
+	ctx, span := tracer.Start(ctx, "RoomRepository.GetByID")
+	defer span.End()
+	span.SetAttributes(attribute.String("room_id", id))
+
+	query := `SELECT EXISTS(SELECT 1 FROM rooms WHERE id = $1)`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&exists)
+	if err != nil {
+		span.RecordError(err)
+		return false, fmt.Errorf("failed to check room: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *MessageRepository) GetHistory(ctx context.Context, roomID string, limit int) ([]StoredMessage, error) {
+	ctx, span := tracer.Start(ctx, "MessageRepository.GetHistory")
+	defer span.End()
+	span.SetAttributes(attribute.String("room_id", roomID))
+
 	query := `
         SELECT u.username, m.content, m.created_at
         FROM messages m
@@ -142,6 +175,7 @@ func (r *MessageRepository) GetHistory(ctx context.Context, roomID string, limit
     `
 	rows, err := r.db.QueryContext(ctx, query, roomID, limit)
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}
 	defer rows.Close()
@@ -150,12 +184,14 @@ func (r *MessageRepository) GetHistory(ctx context.Context, roomID string, limit
 	for rows.Next() {
 		var msg StoredMessage
 		if err := rows.Scan(&msg.Username, &msg.Content, &msg.CreatedAt); err != nil {
+			span.RecordError(err)
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		messages = append(messages, msg)
 	}
 
 	if err := rows.Err(); err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf("failed to iterate rows: %w", err)
 	}
 
@@ -163,6 +199,9 @@ func (r *MessageRepository) GetHistory(ctx context.Context, roomID string, limit
 }
 
 func (r *MessageRepository) Save(ctx context.Context, roomID, userID, content string) error {
+	ctx, span := tracer.Start(ctx, "MessageRepository.Save")
+	defer span.End()
+	span.SetAttributes(attribute.String("room_id", roomID))
 
 	query := `
 		INSERT INTO messages (room_id, user_id, content)
@@ -171,6 +210,7 @@ func (r *MessageRepository) Save(ctx context.Context, roomID, userID, content st
 
 	_, err := r.db.ExecContext(ctx, query, roomID, userID, content)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("failed to save message: %w", err)
 	}
 

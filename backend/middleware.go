@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type contextKey string
@@ -44,4 +46,8 @@ func SetClaims(r *http.Request, claims *Claims) *http.Request {
 func GetClaims(r *http.Request) *Claims {
 	claims, _ := r.Context().Value(claimsKey).(*Claims)
 	return claims
+}
+
+func TracingMiddleware(next http.Handler, name string) http.Handler {
+	return otelhttp.NewHandler(next, name)
 }

@@ -1,4 +1,4 @@
-FROM golang:1.26-alpine
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -8,6 +8,14 @@ RUN go mod download
 COPY backend/ .
 COPY frontend ./frontend
 
-RUN go build -o main .
+RUN CGO_ENABLED=0 GOOS=linux go build -o main .
+
+FROM alpine:3.19
+
+WORKDIR /app
+
+COPY --from=builder /app/main .
+COPY --from=builder /app/frontend ./frontend
+COPY --from=builder /app/migrations ./migrations
 
 CMD ["./main"]
