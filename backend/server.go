@@ -9,7 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func RegisterRoutes(hub *Hub, userRepo *UserRepository, roomRepo *RoomRepository) *http.ServeMux {
+func RegisterRoutes(hub *Hub, userRepo UserRepo, roomRepo RoomRepo) *http.ServeMux {
 	var upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
@@ -32,7 +32,7 @@ func RegisterRoutes(hub *Hub, userRepo *UserRepository, roomRepo *RoomRepository
 	return router
 }
 
-func StartServer(hub *Hub, userRepo *UserRepository, roomRepo *RoomRepository) {
+func StartServer(hub *Hub, userRepo UserRepo, roomRepo RoomRepo) {
 	router := RegisterRoutes(hub, userRepo, roomRepo)
 	address := os.Getenv("SERVER_ADDRESS")
 	if address == "" {

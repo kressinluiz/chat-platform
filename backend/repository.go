@@ -12,6 +12,17 @@ import (
 
 var tracer = otel.Tracer("chat/repository")
 
+type UserRepo interface {
+	Create(ctx context.Context, username, hashedPassword string) (string, error)
+	GetByUsername(ctx context.Context, username string) (string, string, error)
+}
+
+type RoomRepo interface {
+	Create(ctx context.Context, name string) (Room, error)
+	List(ctx context.Context) ([]Room, error)
+	GetByID(ctx context.Context, id string) (bool, error)
+}
+
 type RoomRepository struct {
 	db *sql.DB
 }
@@ -30,23 +41,28 @@ type MessageRepository struct {
 	db *sql.DB
 }
 
+type MessageRepo interface {
+	Save(ctx context.Context, roomID, userID, content string) error
+	GetHistory(ctx context.Context, roomID string, limit int) ([]StoredMessage, error)
+}
+
 type StoredMessage struct {
 	Username  string
 	Content   string
 	CreatedAt time.Time
 }
 
-func NewRoomRepository(db *sql.DB) *RoomRepository {
+func NewRoomRepository(db *sql.DB) RoomRepo {
 	return &RoomRepository{db: db}
 }
 
-func NewMessageRepository(db *sql.DB) *MessageRepository {
+func NewMessageRepository(db *sql.DB) MessageRepo {
 	return &MessageRepository{
 		db: db,
 	}
 }
 
-func NewUserRepository(db *sql.DB) *UserRepository {
+func NewUserRepository(db *sql.DB) UserRepo {
 	return &UserRepository{
 		db: db,
 	}

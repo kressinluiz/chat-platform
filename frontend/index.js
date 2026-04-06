@@ -10,6 +10,7 @@ const passwordEl = document.getElementById("password");
 const newRoomEl = document.getElementById("new-room");
 const connectBtn = document.getElementById("connect");
 const createRoomBtn = document.getElementById("create-room")
+const leaveRoomBtn = document.getElementById("leave-room")
 
 let token = null;
 let ws = null;
@@ -22,9 +23,7 @@ connectBtn.addEventListener("click", function () {
   if (username === "" || username.length > 20) return;
   if (password === "" || password.length < 8) return;
 
-  console.log("Logging in with", username, password)
-
-  fetch("http://localhost:8080/login", {
+  fetch("/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
@@ -32,11 +31,9 @@ connectBtn.addEventListener("click", function () {
     .then(res => res.json())
     .then(data => {
       if (data.error) {
-        console.log(data)
         appendMessage("Login failed: " + data.error);
         return;
       }
-      console.log(data)
       token = data.token;
     }).then(async _ => await loadRooms());
 });
@@ -45,10 +42,10 @@ createRoomBtn.addEventListener("click", async function () {
   const newRoom = newRoomEl.value.trim();
   if (newRoom === "" || newRoom.length > 50) return;
 
-  fetch("http://localhost:8080/rooms", {
+  fetch("/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-    body: JSON.stringify({ Name: newRoom }),
+    body: JSON.stringify({ name: newRoom }),
   })
     .then(res => res.json())
     .then(data => {
@@ -56,23 +53,30 @@ createRoomBtn.addEventListener("click", async function () {
         appendMessage("Create room failed: " + data.error);
         return;
       }
-      const li = document.createElement("li");
-      li.textContent = data.name;
-      //addeventlistenerclick
-      roomList.appendChild(li);
+      loadRooms();
     });
 });
 
 btn.addEventListener("click", sendMessage);
+leaveRoomBtn.addEventListener("click", leaveRoom)
+
+function leaveRoom() {
+  messages.replaceChildren();
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  room_id = null;
+  loadRooms();
+}
 
 input.addEventListener("keydown", function (event) {
   if (event.key === "Enter") sendMessage();
 });
 
 async function loadRooms() {
-  console.log("loadrooms")
   try {
-    fetch("http://localhost:8080/rooms", {
+    fetch("/rooms", {
       method: "GET",
       headers: {
         "Authorization": "Bearer " + token,
@@ -84,11 +88,13 @@ async function loadRooms() {
         rooms = res
         rooms.forEach(room => {
           const li = document.createElement("li");
-          li.textContent = room.name;
+          const roomName = room.name
+          const roomID = room.id
+          li.textContent = roomName;
           li.addEventListener("click", function () {
             rooms.forEach(room => {
-              if (room.name === this.textContent) {
-                room_id = room.id
+              if (room.name === roomName) {
+                room_id = roomID
                 connectWebSocket()
               }
             })
@@ -106,7 +112,7 @@ async function loadRooms() {
 
 function sendMessage() {
   const text = input.value.trim();
-  if (text === "" || ws.readyState !== WebSocket.OPEN) return;
+  if (text === "" || !ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ text: text }));
   input.value = "";
 }
@@ -119,7 +125,8 @@ function appendMessage(text) {
 }
 
 function connectWebSocket() {
-  ws = new WebSocket("ws://localhost:8080/ws?token=" + token + "&room_id=" + room_id);
+  messages.replaceChildren();
+  ws = new WebSocket("ws://" + location.host + "/ws?token=" + token + "&room_id=" + room_id);
 
   ws.onopen = function () {
     loginDiv.style.display = "none";

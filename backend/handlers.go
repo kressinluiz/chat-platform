@@ -41,7 +41,7 @@ type CreateRoomRequest struct {
 	Name string `json:"name"`
 }
 
-func Register(userRepo *UserRepository) http.HandlerFunc {
+func Register(userRepo UserRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req RegisterRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -85,7 +85,7 @@ func Register(userRepo *UserRepository) http.HandlerFunc {
 	}
 }
 
-func Login(userRepo *UserRepository) http.HandlerFunc {
+func Login(userRepo UserRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -131,7 +131,7 @@ func Login(userRepo *UserRepository) http.HandlerFunc {
 	}
 }
 
-func CreateRoom(roomRepo *RoomRepository) http.HandlerFunc {
+func CreateRoom(roomRepo RoomRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateRoomRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -162,7 +162,7 @@ func CreateRoom(roomRepo *RoomRepository) http.HandlerFunc {
 	}
 }
 
-func ListRooms(roomRepo *RoomRepository) http.HandlerFunc {
+func ListRooms(roomRepo RoomRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -177,7 +177,7 @@ func ListRooms(roomRepo *RoomRepository) http.HandlerFunc {
 	}
 }
 
-func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, roomRepo *RoomRepository, upgrader websocket.Upgrader) {
+func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, roomRepo RoomRepo, upgrader websocket.Upgrader) {
 	tokenString := r.URL.Query().Get("token")
 	if tokenString == "" {
 		wsUpgradeFailures.Inc()

@@ -22,7 +22,7 @@ type Hub struct {
 	register       chan *Client
 	unregister     chan *Client
 	logger         *slog.Logger
-	msgRepo        *MessageRepository
+	msgRepo        MessageRepo
 	ClientsCounter atomic.Int64
 }
 
@@ -52,7 +52,7 @@ type MessageContent struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-func StartHub(msgRepo *MessageRepository) *Hub {
+func StartHub(msgRepo MessageRepo) *Hub {
 	hub := Hub{
 		rooms:      make(map[string]map[*Client]bool),
 		broadcast:  make(chan Message),
