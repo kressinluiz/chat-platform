@@ -11,11 +11,19 @@ const newRoomEl = document.getElementById("new-room");
 const connectBtn = document.getElementById("connect");
 const createRoomBtn = document.getElementById("create-room")
 const leaveRoomBtn = document.getElementById("leave-room")
+const statusEl = document.getElementById("status")
 
-let token = null;
+const BASE_DELAY = 1000;
+const MAX_DELAY = 30000;
+const MAX_ATTEMPTS = 10;
+
 let ws = null;
+let token = null;
 let rooms = null;
 let room_id = null;
+let currentRoom = null;
+let attempt = 0;
+let reconnecting = false;
 
 connectBtn.addEventListener("click", function () {
   const username = usernameEl.value.trim();
@@ -95,6 +103,7 @@ async function loadRooms() {
             rooms.forEach(room => {
               if (room.name === roomName) {
                 room_id = roomID
+                attempt = 0
                 connectWebSocket()
               }
             })
@@ -103,6 +112,7 @@ async function loadRooms() {
         })
 
         loginDiv.style.display = "none"
+        chatDiv.style.display = "none"
         roomsDiv.style.display = "block"
       });
   } catch (err) {
@@ -126,9 +136,17 @@ function appendMessage(text) {
 
 function connectWebSocket() {
   messages.replaceChildren();
+  if (ws) {
+    ws.onclose = null;
+    ws.close();
+  }
+
   ws = new WebSocket("ws://" + location.host + "/ws?token=" + token + "&room_id=" + room_id);
 
   ws.onopen = function () {
+    attempt = 0;
+    reconnecting = false;
+    setStatus("Connected")
     loginDiv.style.display = "none";
     roomsDiv.style.display = "none"
     chatDiv.style.display = "block";
@@ -142,12 +160,34 @@ function connectWebSocket() {
   };
 
   ws.onclose = function () {
-    appendMessage("-- disconnected --");
-    loginDiv.style.display = "block";
-    chatDiv.style.display = "none";
+    scheduleReconnect();
   };
 
   ws.onerror = function () {
     appendMessage("-- error --");
   };
+}
+
+function setStatus(text) {
+  if (statusEl) statusEl.textContent = text;
+}
+
+function scheduleReconnect() {
+  if (attempt >= MAX_ATTEMPTS) {
+    setStatus("disconnected — max retries reached");
+    loginDiv.style.display = "block";
+    chatDiv.style.display = "none";
+    token = null;
+    currentRoom = null;
+    attempt = 0;
+    return;
+  }
+
+  const jitter = Math.random() * 1000;
+  const delay = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY) + jitter;
+  attempt++;
+
+  setStatus("reconnecting in " + Math.round(delay / 1000) + "s (attempt " + attempt + "/" + MAX_ATTEMPTS + ")");
+
+  setTimeout(connectWebSocket, delay);
 }

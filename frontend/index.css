@@ -33,3 +33,10 @@ body {
 #send {
     padding: 8px 16px;
 }
+
+#status {
+    font-size: 0.85em;
+    color: #888;
+    margin-bottom: 8px;
+    min-height: 1.2em;
+}
