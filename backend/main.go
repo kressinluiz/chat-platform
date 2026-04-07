@@ -34,7 +34,11 @@ func main() {
 	}()
 
 	db := CreateDBAndRunMigrations()
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			slog.Error("failed to close database connection", "error", err)
+		}
+	}()
 	msgRepo := NewMessageRepository(db)
 	userRepo := NewUserRepository(db)
 	roomRepo := NewRoomRepository(db)

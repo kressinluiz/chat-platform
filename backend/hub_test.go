@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,10 +74,13 @@ type SavedMessage struct {
 }
 
 type MockMessageRepository struct {
+	mu    sync.RWMutex
 	saved []SavedMessage
 }
 
 func (mock *MockMessageRepository) Save(ctx context.Context, roomID, userID, content string) error {
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
 	mock.saved = append(mock.saved, SavedMessage{roomID: roomID, userID: userID, content: content})
 	return nil
 }
@@ -229,6 +233,8 @@ func TestHub_MessageSavedToRepository(t *testing.T) {
 	hub.broadcast <- msg
 	time.Sleep(50 * time.Millisecond) // save is async, give it time
 
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
 	if len(mock.saved) != 1 {
 		t.Fatalf("expected 1 saved message, got %d", len(mock.saved))
 	}

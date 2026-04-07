@@ -44,13 +44,20 @@ func connectWS(t *testing.T, url string) *websocket.Conn {
 	if err != nil {
 		t.Fatalf("failed to connect to websocket: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("failed to close websocket connection: %v", err)
+		}
+	})
 	return conn
 }
 
 func readMessage(t *testing.T, conn *websocket.Conn) MessageContent {
 	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
+
 	_, data, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("failed to read message: %v", err)
@@ -200,7 +207,10 @@ func TestWebSocket_MessageNotBroadcastToOtherRoom(t *testing.T) {
 	sendMessage(t, conn1, "hello from alice")
 	time.Sleep(50 * time.Millisecond)
 
-	conn2.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if err := conn2.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
+
 	_, _, err := conn2.ReadMessage()
 	if err == nil {
 		t.Error("conn2 should not have received a message from a different room")

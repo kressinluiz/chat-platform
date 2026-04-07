@@ -99,7 +99,11 @@ func (r *RoomRepository) List(ctx context.Context) ([]Room, error) {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to list rooms: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			span.RecordError(err)
+		}
+	}()
 
 	rooms := make([]Room, 0)
 	for rows.Next() {
@@ -194,7 +198,11 @@ func (r *MessageRepository) GetHistory(ctx context.Context, roomID string, limit
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			span.RecordError(err)
+		}
+	}()
 
 	var messages []StoredMessage
 	for rows.Next() {

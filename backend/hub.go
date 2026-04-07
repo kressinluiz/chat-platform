@@ -126,9 +126,13 @@ func (h *Hub) ConnectedClients() int {
 
 func (c *Client) ReadRoutine() {
 	c.conn.SetReadLimit(MessageSizeLimit)
-	c.conn.SetReadDeadline(time.Now().Add(DeadlineInterval))
+	if err := c.conn.SetReadDeadline(time.Now().Add(DeadlineInterval)); err != nil {
+		c.logger.Error("failed to set read deadline", "error", err)
+	}
 	c.conn.SetPongHandler(func(appData string) error {
-		c.conn.SetReadDeadline(time.Now().Add(DeadlineInterval))
+		if err := c.conn.SetReadDeadline(time.Now().Add(DeadlineInterval)); err != nil {
+			c.logger.Error("failed to set read deadline", "error", err)
+		}
 		return nil
 	})
 
@@ -179,7 +183,9 @@ func (c *Client) ReadRoutine() {
 	}
 
 	c.hub.unregister <- c
-	c.conn.Close()
+	if err := c.conn.Close(); err != nil {
+		c.logger.Error("failed to close connection", "error", err)
+	}
 }
 
 func (c *Client) WriteRoutine() {
@@ -192,13 +198,20 @@ loop:
 			if !ok {
 				break loop
 			}
-			c.conn.SetWriteDeadline(time.Now().Add(DeadlineInterval))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(DeadlineInterval)); err != nil {
+				c.logger.Error("failed to set write deadline", "error", err)
+				return
+			}
+
 			if err := c.conn.WriteMessage(message.MessageType, message.Content); err != nil {
 				c.logger.Error("failed to write message", "error", err)
 				return
 			}
-		case _ = <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(DeadlineInterval))
+		case <-ticker.C:
+			if err := c.conn.SetWriteDeadline(time.Now().Add(DeadlineInterval)); err != nil {
+				c.logger.Error("failed to set write deadline", "error", err)
+				return
+			}
 			err := c.conn.WriteMessage(websocket.PingMessage, nil)
 			if err != nil {
 				c.logger.Error("failed to send ping", "error", err)
@@ -207,8 +220,14 @@ loop:
 		}
 	}
 
-	c.conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
-	c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "ws closed"))
+	if err := c.conn.SetWriteDeadline(time.Now().Add(1 * time.Second)); err != nil {
+		c.logger.Error("failed to set write deadline", "error", err)
+	}
+
+	if err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "ws closed")); err != nil {
+		c.logger.Error("failed to write close message", "error", err)
+	}
+
 }
 
 func (c *Client) SendHistory(messages []StoredMessage) {
