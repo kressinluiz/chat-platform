@@ -14,7 +14,6 @@ FROM alpine:3.19
 WORKDIR /app
 
 COPY --from=builder /app/main .
-COPY --from=builder /app/.env ./.env
 COPY --from=builder /app/migrations ./migrations
 
 COPY frontend ./frontend
