@@ -6,10 +6,12 @@ import (
 	"os"
 
 	"github.com/gorilla/websocket"
+	"github.com/kressinluiz/chat/internal/middleware"
+	"github.com/kressinluiz/chat/internal/repository"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func RegisterRoutes(hub *Hub, userRepo UserRepo, roomRepo RoomRepo) *http.ServeMux {
+func RegisterRoutes(hub *Hub, userRepo UserRepo, roomRepo RoomRepo, roomMemberRepo repository.RoomMemberRepo) *http.ServeMux {
 	var upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
@@ -18,11 +20,11 @@ func RegisterRoutes(hub *Hub, userRepo UserRepo, roomRepo RoomRepo) *http.ServeM
 	router := http.NewServeMux()
 	router.Handle("/login", TracingMiddleware(PrometheusMiddleware(http.HandlerFunc(Login(userRepo)), "/login"), "login"))
 	router.Handle("/register", TracingMiddleware(PrometheusMiddleware(http.HandlerFunc(Register(userRepo)), "/register"), "register"))
-	router.Handle("/ws", TracingMiddleware(PrometheusMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	router.Handle("/ws", TracingMiddleware(PrometheusMiddleware(middleware.RequireMembership(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		WebSocket(w, r, hub, roomRepo, upgrader)
-	}), "ws"), "ws"))
+	}), roomMemberRepo), "ws"), "ws"))
 	router.Handle("POST /rooms", TracingMiddleware(PrometheusMiddleware(AuthMiddleware(http.HandlerFunc(CreateRoom(roomRepo))), "/rooms"), "create_room"))
-	router.Handle("GET /rooms", TracingMiddleware(PrometheusMiddleware(AuthMiddleware(http.HandlerFunc(ListRooms(roomRepo))), "/rooms"), "list_rooms"))
+	router.Handle("GET /rooms", TracingMiddleware(PrometheusMiddleware(AuthMiddleware((http.HandlerFunc(ListRooms(roomRepo)))), "/rooms"), "list_rooms"))
 
 	fs := http.FileServer(http.Dir("./frontend"))
 	router.Handle("/", fs)
@@ -32,8 +34,8 @@ func RegisterRoutes(hub *Hub, userRepo UserRepo, roomRepo RoomRepo) *http.ServeM
 	return router
 }
 
-func StartServer(hub *Hub, userRepo UserRepo, roomRepo RoomRepo) {
-	router := RegisterRoutes(hub, userRepo, roomRepo)
+func StartServer(hub *Hub, userRepo UserRepo, roomRepo RoomRepo, roomMemberRepo repository.RoomMemberRepo) {
+	router := RegisterRoutes(hub, userRepo, roomRepo, roomMemberRepo)
 	address := os.Getenv("SERVER_ADDRESS")
 	if address == "" {
 		address = "0.0.0.0:8080"

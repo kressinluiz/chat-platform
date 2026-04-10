@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/kressinluiz/chat/internal/cache"
+	"github.com/kressinluiz/chat/internal/repository"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -33,6 +35,12 @@ func main() {
 		}
 	}()
 
+	redisClient, err := cache.NewRedisClient(os.Getenv("REDIS_ADDR"))
+	if err != nil {
+		slog.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+
 	db := CreateDBAndRunMigrations()
 	defer func() {
 		if err := db.Close(); err != nil {
@@ -42,7 +50,8 @@ func main() {
 	msgRepo := NewMessageRepository(db)
 	userRepo := NewUserRepository(db)
 	roomRepo := NewRoomRepository(db)
-	hub := StartHub(msgRepo)
+	roomMemberRepo := repository.NewRoomMemberRepo(db)
+	hub := StartHub(msgRepo, redisClient)
 
 	prometheus.MustRegister(httpRequests)
 	prometheus.MustRegister(NewActiveConnectionsMetric(hub))
@@ -50,5 +59,5 @@ func main() {
 	prometheus.MustRegister(messagesTotal)
 	prometheus.MustRegister(wsUpgradeFailures)
 
-	StartServer(hub, userRepo, roomRepo)
+	StartServer(hub, userRepo, roomRepo, roomMemberRepo)
 }

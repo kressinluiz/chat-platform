@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/kressinluiz/chat/internal/ws"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -225,7 +226,7 @@ func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, roomRepo RoomRe
 
 	client := Client{
 		conn:             conn,
-		receivedMessages: make(chan Message, ClientBufferSize),
+		receivedMessages: make(chan ws.Event, ClientBufferSize),
 		hub:              hub,
 		Username:         claims.Username,
 		UserID:           claims.UserID,

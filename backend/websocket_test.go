@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/kressinluiz/chat/internal/ws"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *Hub) {
@@ -16,7 +17,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *Hub) {
 	mock := &MockMessageRepository{}
 	hub := &Hub{
 		rooms:      make(map[string]map[*Client]bool),
-		broadcast:  make(chan Message),
+		broadcast:  make(chan ws.Event),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     noopLogger(),
@@ -26,8 +27,9 @@ func newTestServer(t *testing.T) (*httptest.Server, *Hub) {
 
 	userRepo := &MockUserRepository{}
 	roomRepo := &MockRoomRepository{}
+	roomMemberRepo := &MockRoomMemberRepo{}
 
-	server := httptest.NewServer(RegisterRoutes(hub, userRepo, roomRepo))
+	server := httptest.NewServer(RegisterRoutes(hub, userRepo, roomRepo, roomMemberRepo))
 	t.Cleanup(server.Close)
 
 	return server, hub
@@ -118,7 +120,7 @@ func TestWebSocket_RejectsUnknownRoom(t *testing.T) {
 	mock := &MockMessageRepository{}
 	hub := &Hub{
 		rooms:      make(map[string]map[*Client]bool),
-		broadcast:  make(chan Message),
+		broadcast:  make(chan ws.Event),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     noopLogger(),
@@ -127,7 +129,8 @@ func TestWebSocket_RejectsUnknownRoom(t *testing.T) {
 	go hub.Run()
 
 	roomRepo := &MockRoomRepository{}
-	server := httptest.NewServer(RegisterRoutes(hub, &MockUserRepository{}, roomRepo))
+	roomMemberRepo := &MockRoomMemberRepo{}
+	server := httptest.NewServer(RegisterRoutes(hub, &MockUserRepository{}, roomRepo, roomMemberRepo))
 	t.Cleanup(server.Close)
 
 	token := testToken(t, "user-id", "user-test")
@@ -185,7 +188,7 @@ func TestWebSocket_MessageNotBroadcastToOtherRoom(t *testing.T) {
 	mock := &MockMessageRepository{}
 	hub := &Hub{
 		rooms:      make(map[string]map[*Client]bool),
-		broadcast:  make(chan Message),
+		broadcast:  make(chan ws.Event),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     noopLogger(),
@@ -194,7 +197,8 @@ func TestWebSocket_MessageNotBroadcastToOtherRoom(t *testing.T) {
 	go hub.Run()
 
 	roomRepo := &MockRoomRepository{}
-	server := httptest.NewServer(RegisterRoutes(hub, &MockUserRepository{}, roomRepo))
+	roomMemberRepo := &MockRoomMemberRepo{}
+	server := httptest.NewServer(RegisterRoutes(hub, &MockUserRepository{}, roomRepo, roomMemberRepo))
 	t.Cleanup(server.Close)
 
 	token1 := testToken(t, "user-1", "alice")

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/kressinluiz/chat/internal/ws"
 )
 
 func newTestHTTPServer(t *testing.T) *httptest.Server {
@@ -14,14 +16,14 @@ func newTestHTTPServer(t *testing.T) *httptest.Server {
 	mock := &MockMessageRepository{}
 	hub := &Hub{
 		rooms:      make(map[string]map[*Client]bool),
-		broadcast:  make(chan Message),
+		broadcast:  make(chan ws.Event),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     noopLogger(),
 		msgRepo:    mock,
 	}
 	go hub.Run()
-	server := httptest.NewServer(RegisterRoutes(hub, newMockUserRepo(), &MockRoomRepository{}))
+	server := httptest.NewServer(RegisterRoutes(hub, newMockUserRepo(), &MockRoomRepository{}, &MockRoomMemberRepo{}))
 	t.Cleanup(server.Close)
 	return server
 }
@@ -157,16 +159,17 @@ func TestLogin_Success(t *testing.T) {
 
 	userRepo := newMockUserRepo()
 	mock := &MockMessageRepository{}
+	roomMemberRepo := &MockRoomMemberRepo{}
 	hub := &Hub{
 		rooms:      make(map[string]map[*Client]bool),
-		broadcast:  make(chan Message),
+		broadcast:  make(chan ws.Event),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     noopLogger(),
 		msgRepo:    mock,
 	}
 	go hub.Run()
-	server := httptest.NewServer(RegisterRoutes(hub, userRepo, &MockRoomRepository{}))
+	server := httptest.NewServer(RegisterRoutes(hub, userRepo, &MockRoomRepository{}, roomMemberRepo))
 	t.Cleanup(server.Close)
 
 	postJSON(t, server.URL+"/register", RegisterRequest{
@@ -197,14 +200,14 @@ func TestLogin_WrongPassword(t *testing.T) {
 	mock := &MockMessageRepository{}
 	hub := &Hub{
 		rooms:      make(map[string]map[*Client]bool),
-		broadcast:  make(chan Message),
+		broadcast:  make(chan ws.Event),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     noopLogger(),
 		msgRepo:    mock,
 	}
 	go hub.Run()
-	server := httptest.NewServer(RegisterRoutes(hub, userRepo, &MockRoomRepository{}))
+	server := httptest.NewServer(RegisterRoutes(hub, userRepo, &MockRoomRepository{}, &MockRoomMemberRepo{}))
 	t.Cleanup(server.Close)
 
 	postJSON(t, server.URL+"/register", RegisterRequest{
