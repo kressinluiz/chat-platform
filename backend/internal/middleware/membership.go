@@ -1,0 +1,93 @@
+package middleware
+
+import (
+	"log/slog"
+	"net/http"
+
+	"github.com/kressinluiz/chat/internal/auth"
+	"github.com/kressinluiz/chat/internal/repository"
+)
+
+func RequireMembership(next http.HandlerFunc, repo repository.RoomMemberRepo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tokenString := r.URL.Query().Get("token")
+		if tokenString == "" {
+			http.Error(w, "missing token", http.StatusUnauthorized)
+			return
+		}
+		claims, err := auth.ValidateToken(tokenString)
+		if err != nil {
+			slog.Warn("invalid token on websocket upgrade", "error", err)
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		roomID := r.URL.Query().Get("room_id")
+		if roomID == "" {
+			http.Error(w, "missing room_id", http.StatusUnauthorized)
+			slog.Warn("missing room_id in query")
+			return
+		}
+
+		isMember, err := repo.IsMember(r.Context(), roomID, claims.UserID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			slog.Warn("error checking membership", "error", err)
+			return
+		}
+		if !isMember {
+			http.Error(w, "not a member of this room", http.StatusForbidden)
+			slog.Warn("user is not a member of the requested room")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}
+}
+
+func RequireRole(repo repository.RoomMemberRepo, minRole repository.RoomRole) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tokenString := r.URL.Query().Get("token")
+			if tokenString == "" {
+				http.Error(w, "missing token", http.StatusUnauthorized)
+				return
+			}
+			claims, err := auth.ValidateToken(tokenString)
+			if err != nil {
+				slog.Warn("invalid token on websocket upgrade", "error", err)
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
+			roomID := r.URL.Query().Get("room_id")
+			if roomID == "" {
+				slog.Warn("missing room_id")
+				http.Error(w, "missing room_id", http.StatusUnauthorized)
+				return
+			}
+
+			role, err := repo.GetRole(r.Context(), roomID, claims.UserID)
+			if err != nil {
+				slog.Warn("error fetching user role", "error", err)
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+
+			if !hasMinRole(role, minRole) {
+				slog.Warn("user does not have required role", "user_id", claims.UserID, "room_id", roomID, "required_role", minRole, "actual_role", role)
+				http.Error(w, "insufficient permissions", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func hasMinRole(actual, required repository.RoomRole) bool {
+	rank := map[repository.RoomRole]int{
+		repository.RoleMember:    1,
+		repository.RoleModerator: 2,
+		repository.RoleAdmin:     3,
+	}
+	return rank[actual] >= rank[required]
+}

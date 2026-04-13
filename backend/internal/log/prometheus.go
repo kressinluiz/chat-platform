@@ -1,4 +1,4 @@
-package main
+package log
 
 import (
 	"net/http"
@@ -47,14 +47,14 @@ func PrometheusMiddleware(next http.Handler, path string) http.Handler {
 	})
 }
 
-func NewActiveConnectionsMetric(hub *Hub) prometheus.GaugeFunc {
-	return prometheus.NewGaugeFunc(
-		prometheus.GaugeOpts{
-			Name: "active_websocket_connections",
-			Help: "Current number of active WebSocket connections",
-		},
-		func() float64 {
-			return float64(hub.ConnectedClients())
-		},
-	)
-}
+// func NewActiveConnectionsMetric(hub *Hub) prometheus.GaugeFunc {
+// 	return prometheus.NewGaugeFunc(
+// 		prometheus.GaugeOpts{
+// 			Name: "active_websocket_connections",
+// 			Help: "Current number of active WebSocket connections",
+// 		},
+// 		func() float64 {
+// 			return float64(hub.ConnectedClients())
+// 		},
+// 	)
+// }

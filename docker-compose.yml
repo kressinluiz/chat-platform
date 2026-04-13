@@ -1,12 +1,22 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --save "" --appendonly no 
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
   postgres:
     image: postgres:16
     env_file:
       - ./backend/.env
-    environment:
-      POSTGRES_USER: ${{ vars.DB_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      POSTGRES_DB: ${{ vars.DB_NAME }}
+    # environment:
+    #   POSTGRES_USER: ${{ vars.DB_USER }}
+    #   POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+    #   POSTGRES_DB: ${{ vars.DB_NAME }}
     ports:
       - "5432:5432"
     volumes:
@@ -19,15 +29,15 @@ services:
   app:
     env_file:
       - ./backend/.env
-    environment:
-      LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-      DB_HOST: ${{ vars.DB_HOST }}
-      DB_PORT: ${{ vars.DB_PORT }}
-      DB_USER: ${{ vars.DB_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      DB_NAME: ${{ vars.DB_NAME }}
-      SERVER_ADDRESS: ${{ vars.SERVER_ADDRESS }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    # environment:
+    #   LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+    #   DB_HOST: ${{ vars.DB_HOST }}
+    #   DB_PORT: ${{ vars.DB_PORT }}
+    #   DB_USER: ${{ vars.DB_USER }}
+    #   POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+    #   DB_NAME: ${{ vars.DB_NAME }}
+    #   SERVER_ADDRESS: ${{ vars.SERVER_ADDRESS }}
+    #   JWT_SECRET: ${{ secrets.JWT_SECRET }}
     build:
       context: .
       dockerfile: Dockerfile
@@ -35,6 +45,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
+      redis:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       jaeger:

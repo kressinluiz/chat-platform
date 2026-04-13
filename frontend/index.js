@@ -123,7 +123,22 @@ async function loadRooms() {
 function sendMessage() {
   const text = input.value.trim();
   if (text === "" || !ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ text: text }));
+  ws.send(JSON.stringify({
+    id: crypto.randomUUID(),
+    type: "message.send",
+    // room_id: "", // server handle this
+    // seq: 0, // server handle this
+    payload: {
+      message_id: crypto.randomUUID(),
+      // user_id: "", // server handle this
+      // room_id: "", // server handle this
+      // username: "", // server handle this
+      content: text,
+      parent_id: "",
+      // created_at: "", // server handle this
+    },
+    // sent_at: "", // server handle this
+  }));
   input.value = "";
 }
 
@@ -154,12 +169,13 @@ function connectWebSocket() {
   };
 
   ws.onmessage = function (event) {
-    const msg = JSON.parse(event.data);
-    const time = new Date(msg.timestamp).toLocaleTimeString();
-    appendMessage("[" + time + "] " + msg.username + ": " + msg.text);
+    const eventFromServer = JSON.parse(event.data);
+    // const time = new Date(msg.timestamp).toLocaleTimeString();
+    appendMessage("[" + eventFromServer.payload.created_at + "] " + eventFromServer.payload.username + ": " + eventFromServer.payload.content);
   };
 
-  ws.onclose = function () {
+  ws.onclose = function (event) {
+    console.log("WebSocket closed:", event);
     scheduleReconnect();
   };
 
@@ -173,6 +189,7 @@ function setStatus(text) {
 }
 
 function scheduleReconnect() {
+  console.log("WebSocket connection closed, scheduling reconnect...");
   if (attempt >= MAX_ATTEMPTS) {
     setStatus("disconnected — max retries reached");
     loginDiv.style.display = "block";

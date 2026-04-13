@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"context"
@@ -9,6 +9,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/kressinluiz/chat/internal/auth"
+	"github.com/kressinluiz/chat/internal/hub"
+	"github.com/kressinluiz/chat/internal/repository"
+	"github.com/kressinluiz/chat/internal/ws"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -41,7 +45,7 @@ type CreateRoomRequest struct {
 	Name string `json:"name"`
 }
 
-func Register(userRepo UserRepo) http.HandlerFunc {
+func Register(userRepo repository.UserRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req RegisterRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -85,7 +89,7 @@ func Register(userRepo UserRepo) http.HandlerFunc {
 	}
 }
 
-func Login(userRepo UserRepo) http.HandlerFunc {
+func Login(userRepo repository.UserRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -117,7 +121,7 @@ func Login(userRepo UserRepo) http.HandlerFunc {
 			return
 		}
 
-		token, err := GenerateToken(id, req.Username)
+		token, err := auth.GenerateToken(id, req.Username)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "failed to generate token")
 			return
@@ -131,7 +135,7 @@ func Login(userRepo UserRepo) http.HandlerFunc {
 	}
 }
 
-func CreateRoom(roomRepo RoomRepo) http.HandlerFunc {
+func CreateRoom(roomRepo repository.RoomRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateRoomRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -162,7 +166,7 @@ func CreateRoom(roomRepo RoomRepo) http.HandlerFunc {
 	}
 }
 
-func ListRooms(roomRepo RoomRepo) http.HandlerFunc {
+func ListRooms(roomRepo repository.RoomRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -177,17 +181,17 @@ func ListRooms(roomRepo RoomRepo) http.HandlerFunc {
 	}
 }
 
-func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, roomRepo RoomRepo, upgrader websocket.Upgrader) {
+func WebSocket(w http.ResponseWriter, r *http.Request, h *hub.Hub, roomRepo repository.RoomRepo, upgrader websocket.Upgrader) {
 	tokenString := r.URL.Query().Get("token")
 	if tokenString == "" {
-		wsUpgradeFailures.Inc()
+		// wsUpgradeFailures.Inc()
 		http.Error(w, "missing token", http.StatusUnauthorized)
 		return
 	}
 
 	roomID := r.URL.Query().Get("room_id")
 	if roomID == "" {
-		wsUpgradeFailures.Inc()
+		// wsUpgradeFailures.Inc()
 		http.Error(w, "missing room_id", http.StatusUnauthorized)
 		return
 	}
@@ -197,20 +201,20 @@ func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, roomRepo RoomRe
 	roomFound, err := roomRepo.GetByID(ctx, roomID)
 
 	if err != nil {
-		wsUpgradeFailures.Inc()
+		// wsUpgradeFailures.Inc()
 		http.Error(w, "failed to check room", http.StatusInternalServerError)
 		return
 	}
 
 	if !roomFound {
-		wsUpgradeFailures.Inc()
+		// wsUpgradeFailures.Inc()
 		http.Error(w, "room not found", http.StatusNotFound)
 		return
 	}
 
-	claims, err := ValidateToken(tokenString)
+	claims, err := auth.ValidateToken(tokenString)
 	if err != nil {
-		wsUpgradeFailures.Inc()
+		// wsUpgradeFailures.Inc()
 		slog.Warn("invalid token on websocket upgrade", "error", err)
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
@@ -218,22 +222,22 @@ func WebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, roomRepo RoomRe
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		wsUpgradeFailures.Inc()
+		// wsUpgradeFailures.Inc()
 		http.Error(w, "failed to upgrade to websocket connection", http.StatusInternalServerError)
 		return
 	}
 
-	client := Client{
-		conn:             conn,
-		receivedMessages: make(chan Message, ClientBufferSize),
-		hub:              hub,
+	client := hub.Client{
+		Conn:             conn,
+		ReceivedMessages: make(chan ws.Event, hub.ClientBufferSize),
+		Hub:              h,
 		Username:         claims.Username,
 		UserID:           claims.UserID,
 		RoomID:           roomID,
-		logger:           slog.Default().With("component", "client"),
+		Logger:           slog.Default().With("component", "client"),
 	}
 
-	hub.register <- &client
+	h.Register <- &client
 
 	go client.ReadRoutine()
 	go client.WriteRoutine()

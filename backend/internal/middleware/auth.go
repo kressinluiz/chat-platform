@@ -1,4 +1,4 @@
-package main
+package middleware
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/kressinluiz/chat/internal/auth"
+	"github.com/kressinluiz/chat/internal/handler"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -17,20 +19,20 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			WriteError(w, http.StatusUnauthorized, "missing authorization header")
+			handler.WriteError(w, http.StatusUnauthorized, "missing authorization header")
 			return
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || parts[0] != "Bearer" {
-			WriteError(w, http.StatusUnauthorized, "invalid authorization header format")
+			handler.WriteError(w, http.StatusUnauthorized, "invalid authorization header format")
 			return
 		}
 
-		claims, err := ValidateToken(parts[1])
+		claims, err := auth.ValidateToken(parts[1])
 		if err != nil {
 			slog.Warn("invalid token on http request", "error", err)
-			WriteError(w, http.StatusUnauthorized, "invalid token")
+			handler.WriteError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
 
@@ -39,12 +41,12 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func SetClaims(r *http.Request, claims *Claims) *http.Request {
+func SetClaims(r *http.Request, claims *auth.Claims) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), claimsKey, claims))
 }
 
-func GetClaims(r *http.Request) *Claims {
-	claims, _ := r.Context().Value(claimsKey).(*Claims)
+func GetClaims(r *http.Request) *auth.Claims {
+	claims, _ := r.Context().Value(claimsKey).(*auth.Claims)
 	return claims
 }
 

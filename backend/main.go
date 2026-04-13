@@ -6,7 +6,12 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/kressinluiz/chat/internal/cache"
+	"github.com/kressinluiz/chat/internal/db"
+	"github.com/kressinluiz/chat/internal/hub"
+	"github.com/kressinluiz/chat/internal/log"
+	"github.com/kressinluiz/chat/internal/repository"
+	"github.com/kressinluiz/chat/internal/server"
 )
 
 func DevLoadEnv() {
@@ -18,10 +23,10 @@ func DevLoadEnv() {
 
 func main() {
 	DevLoadEnv()
-	ConfigLogger()
+	log.ConfigLogger()
 
 	ctx := context.Background()
-	tracerProvider, err := InitTracer(ctx)
+	tracerProvider, err := log.InitTracer(ctx)
 	if err != nil {
 		slog.Error("failed to initialize tracer", "error", err)
 		os.Exit(1)
@@ -33,22 +38,29 @@ func main() {
 		}
 	}()
 
-	db := CreateDBAndRunMigrations()
+	redisClient, err := cache.NewRedisClient(os.Getenv("REDIS_ADDR"))
+	if err != nil {
+		slog.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+
+	db := db.CreateDBAndRunMigrations()
 	defer func() {
 		if err := db.Close(); err != nil {
 			slog.Error("failed to close database connection", "error", err)
 		}
 	}()
-	msgRepo := NewMessageRepository(db)
-	userRepo := NewUserRepository(db)
-	roomRepo := NewRoomRepository(db)
-	hub := StartHub(msgRepo)
+	msgRepo := repository.NewMessageRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	roomRepo := repository.NewRoomRepository(db)
+	roomMemberRepo := repository.NewRoomMemberRepo(db)
+	hub := hub.StartHub(msgRepo, redisClient)
 
-	prometheus.MustRegister(httpRequests)
-	prometheus.MustRegister(NewActiveConnectionsMetric(hub))
-	prometheus.MustRegister(requestDuration)
-	prometheus.MustRegister(messagesTotal)
-	prometheus.MustRegister(wsUpgradeFailures)
+	// prometheus.MustRegister(httpRequests)
+	// prometheus.MustRegister(NewActiveConnectionsMetric(hub))
+	// prometheus.MustRegister(requestDuration)
+	// prometheus.MustRegister(messagesTotal)
+	// prometheus.MustRegister(wsUpgradeFailures)
 
-	StartServer(hub, userRepo, roomRepo)
+	server.StartServer(hub, userRepo, roomRepo, roomMemberRepo)
 }
