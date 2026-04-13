@@ -12,7 +12,6 @@ import (
 	"github.com/kressinluiz/chat/internal/auth"
 	"github.com/kressinluiz/chat/internal/hub"
 	"github.com/kressinluiz/chat/internal/repository"
-	"github.com/kressinluiz/chat/internal/ws"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -227,17 +226,8 @@ func WebSocket(w http.ResponseWriter, r *http.Request, h *hub.Hub, roomRepo repo
 		return
 	}
 
-	client := hub.Client{
-		Conn:             conn,
-		ReceivedMessages: make(chan ws.Event, hub.ClientBufferSize),
-		Hub:              h,
-		Username:         claims.Username,
-		UserID:           claims.UserID,
-		RoomID:           roomID,
-		Logger:           slog.Default().With("component", "client"),
-	}
-
-	h.Register <- &client
+	client := hub.NewClient(conn, h, claims.Username, claims.UserID, roomID, slog.Default().With("component", "client"))
+	h.Join(client)
 
 	go client.ReadRoutine()
 	go client.WriteRoutine()

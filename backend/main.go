@@ -54,7 +54,7 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	roomRepo := repository.NewRoomRepository(db)
 	roomMemberRepo := repository.NewRoomMemberRepo(db)
-	hub := hub.StartHub(msgRepo, redisClient)
+	hub := hub.NewHub(msgRepo, redisClient, slog.Default().With("component", "hub"))
 
 	// prometheus.MustRegister(httpRequests)
 	// prometheus.MustRegister(NewActiveConnectionsMetric(hub))

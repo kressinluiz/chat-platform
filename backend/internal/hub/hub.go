@@ -22,9 +22,9 @@ const HistoryLimit = 50
 
 type Hub struct {
 	Rooms          map[string]map[*Client]bool
-	Broadcast      chan ws.Event
-	Register       chan *Client
-	Unregister     chan *Client
+	broadcast      chan ws.Event
+	register       chan *Client
+	unregister     chan *Client
 	Logger         *slog.Logger
 	MsgRepo        repository.MessageRepo
 	ClientsCounter atomic.Int64
@@ -34,7 +34,7 @@ type Hub struct {
 
 type Client struct {
 	Conn             *websocket.Conn
-	ReceivedMessages chan ws.Event
+	receivedMessages chan ws.Event
 	Hub              *Hub
 	Username         string
 	RoomID           string
@@ -58,13 +58,13 @@ type MessageContent struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-func StartHub(msgRepo repository.MessageRepo, redisClient cache.Client) *Hub {
+func NewHub(msgRepo repository.MessageRepo, redisClient cache.Client, logger *slog.Logger) *Hub {
 	hub := Hub{
 		Rooms:      make(map[string]map[*Client]bool),
-		Broadcast:  make(chan ws.Event),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-		Logger:     slog.Default().With("component", "hub"),
+		broadcast:  make(chan ws.Event),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
+		Logger:     logger,
 		MsgRepo:    msgRepo,
 		Cache:      redisClient,
 	}
@@ -72,10 +72,18 @@ func StartHub(msgRepo repository.MessageRepo, redisClient cache.Client) *Hub {
 	return &hub
 }
 
+func (h *Hub) Join(client *Client) {
+	h.register <- client
+}
+
+func (h *Hub) Leave(client *Client) {
+	h.unregister <- client
+}
+
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-h.Register:
+		case client := <-h.register:
 			if _, exists := h.Rooms[client.RoomID]; !exists {
 				h.Rooms[client.RoomID] = make(map[*Client]bool)
 			}
@@ -83,9 +91,9 @@ func (h *Hub) Run() {
 			h.Logger.Info("client registered", "room", client.RoomID, "username", client.Username)
 			h.ClientsCounter.Add(1)
 
-		case client := <-h.Unregister:
+		case client := <-h.unregister:
 			if _, exists := h.Rooms[client.RoomID][client]; exists {
-				close(client.ReceivedMessages)
+				close(client.receivedMessages)
 				delete(h.Rooms[client.RoomID], client)
 				h.Logger.Info("client unregistered", "room", client.RoomID, "username", client.Username)
 				h.ClientsCounter.Add(-1)
@@ -96,13 +104,13 @@ func (h *Hub) Run() {
 				}
 			}
 
-		case message := <-h.Broadcast:
+		case message := <-h.broadcast:
 			if room, exists := h.Rooms[message.RoomID]; exists {
 				for client := range room {
 					select {
-					case client.ReceivedMessages <- message:
+					case client.receivedMessages <- message:
 					default:
-						close(client.ReceivedMessages)
+						close(client.receivedMessages)
 						delete(room, client)
 						h.ClientsCounter.Add(-1)
 						h.Logger.Warn("client dropped, buffer full", "room", client.RoomID, "username", client.Username)
@@ -120,6 +128,30 @@ func (h *Hub) Run() {
 
 func (h *Hub) ConnectedClients() int {
 	return int(h.ClientsCounter.Load())
+}
+
+func (h *Hub) nextSeq(roomID string) int64 {
+	key := fmt.Sprintf("seq:%s", roomID)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	val, err := h.Cache.Incr(ctx, key)
+	if err != nil {
+		return h.LocalSeq.Add(1)
+	}
+	return val
+}
+
+func NewClient(conn *websocket.Conn, hub *Hub, username, roomID, userID string, logger *slog.Logger) *Client {
+	return &Client{
+		Conn:             conn,
+		receivedMessages: make(chan ws.Event, ClientBufferSize),
+		Hub:              hub,
+		Username:         username,
+		RoomID:           roomID,
+		UserID:           userID,
+		Logger:           logger,
+	}
 }
 
 func (c *Client) ReadRoutine() {
@@ -198,7 +230,7 @@ func (c *Client) ReadRoutine() {
 				Payload: data,
 				SentAt:  event.SentAt,
 			}
-			c.Hub.Broadcast <- message
+			c.Hub.broadcast <- message
 			go func(roomID, userID, content string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
@@ -217,7 +249,7 @@ func (c *Client) ReadRoutine() {
 		}
 	}
 
-	c.Hub.Unregister <- c
+	c.Hub.Leave(c)
 	if err := c.Conn.Close(); err != nil {
 		c.Logger.Error("failed to close connection", "error", err)
 	}
@@ -229,7 +261,7 @@ func (c *Client) WriteRoutine() {
 loop:
 	for {
 		select {
-		case message, ok := <-c.ReceivedMessages:
+		case message, ok := <-c.receivedMessages:
 			if !ok {
 				break loop
 			}
@@ -283,7 +315,7 @@ func (c *Client) SendHistory(messages []repository.StoredMessage) {
 			c.Logger.Error("failed to marshal history message", "error", err)
 			continue
 		}
-		c.ReceivedMessages <- ws.Event{
+		c.receivedMessages <- ws.Event{
 			ID:      "", // need to fix this later
 			Seq:     0,  // need to fix this later
 			RoomID:  c.RoomID,
@@ -292,16 +324,4 @@ func (c *Client) SendHistory(messages []repository.StoredMessage) {
 			SentAt:  time.Now().Format(time.RFC3339),
 		}
 	}
-}
-
-func (h *Hub) nextSeq(roomID string) int64 {
-	key := fmt.Sprintf("seq:%s", roomID)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	val, err := h.Cache.Incr(ctx, key)
-	if err != nil {
-		return h.LocalSeq.Add(1)
-	}
-	return val
 }
