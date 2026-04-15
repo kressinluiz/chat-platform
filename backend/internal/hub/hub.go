@@ -19,10 +19,11 @@ const DeadlineInterval = 10 * time.Second
 const MessageSizeLimit = 4096 //4KB
 const ClientBufferSize = 256
 const HistoryLimit = 50
+const TypingTTL = 1000000 * time.Second
 
 type Hub struct {
 	Rooms          map[string]map[*Client]bool
-	broadcast      chan ws.Event
+	Broadcast      chan ws.Event
 	register       chan *Client
 	unregister     chan *Client
 	Logger         *slog.Logger
@@ -34,7 +35,7 @@ type Hub struct {
 
 type Client struct {
 	Conn             *websocket.Conn
-	receivedMessages chan ws.Event
+	ReceivedMessages chan ws.Event
 	Hub              *Hub
 	Username         string
 	RoomID           string
@@ -58,18 +59,20 @@ type MessageContent struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-func NewHub(msgRepo repository.MessageRepo, redisClient cache.Client, logger *slog.Logger) *Hub {
+func NewHub(msgRepo repository.MessageRepo, redisClient cache.Client, logger *slog.Logger) (*Hub, error) {
+	if redisClient == nil {
+		return nil, fmt.Errorf("redis client cannot be nil")
+	}
 	hub := Hub{
 		Rooms:      make(map[string]map[*Client]bool),
-		broadcast:  make(chan ws.Event),
+		Broadcast:  make(chan ws.Event),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		Logger:     logger,
 		MsgRepo:    msgRepo,
 		Cache:      redisClient,
 	}
-	go hub.Run()
-	return &hub
+	return &hub, nil
 }
 
 func (h *Hub) Join(client *Client) {
@@ -93,7 +96,7 @@ func (h *Hub) Run() {
 
 		case client := <-h.unregister:
 			if _, exists := h.Rooms[client.RoomID][client]; exists {
-				close(client.receivedMessages)
+				close(client.ReceivedMessages)
 				delete(h.Rooms[client.RoomID], client)
 				h.Logger.Info("client unregistered", "room", client.RoomID, "username", client.Username)
 				h.ClientsCounter.Add(-1)
@@ -104,13 +107,13 @@ func (h *Hub) Run() {
 				}
 			}
 
-		case message := <-h.broadcast:
+		case message := <-h.Broadcast:
 			if room, exists := h.Rooms[message.RoomID]; exists {
 				for client := range room {
 					select {
-					case client.receivedMessages <- message:
+					case client.ReceivedMessages <- message:
 					default:
-						close(client.receivedMessages)
+						close(client.ReceivedMessages)
 						delete(room, client)
 						h.ClientsCounter.Add(-1)
 						h.Logger.Warn("client dropped, buffer full", "room", client.RoomID, "username", client.Username)
@@ -145,7 +148,7 @@ func (h *Hub) nextSeq(roomID string) int64 {
 func NewClient(conn *websocket.Conn, hub *Hub, username, roomID, userID string, logger *slog.Logger) *Client {
 	return &Client{
 		Conn:             conn,
-		receivedMessages: make(chan ws.Event, ClientBufferSize),
+		ReceivedMessages: make(chan ws.Event, ClientBufferSize),
 		Hub:              hub,
 		Username:         username,
 		RoomID:           roomID,
@@ -230,7 +233,7 @@ func (c *Client) ReadRoutine() {
 				Payload: data,
 				SentAt:  event.SentAt,
 			}
-			c.Hub.broadcast <- message
+			c.Hub.Broadcast <- message
 			go func(roomID, userID, content string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
@@ -240,9 +243,8 @@ func (c *Client) ReadRoutine() {
 				}
 			}(c.RoomID, c.UserID, payload.Content)
 		case ws.EventTypeDeliveryAck:
-			// handle delivery ack event
 		case ws.EventTypeTypingStart, ws.EventTypeTypingStop:
-			// handle typing events
+			c.HandleTyping(event)
 		default:
 			c.Logger.Warn("unknown event type", "type", event.Type)
 			continue
@@ -255,13 +257,70 @@ func (c *Client) ReadRoutine() {
 	}
 }
 
+func (c *Client) HandleTyping(event ws.Event) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	key := fmt.Sprintf("typing:%s:%s", c.RoomID, c.UserID)
+
+	switch event.Type {
+	case ws.EventTypeTypingStart:
+		if err := c.Hub.Cache.Set(ctx, key, c.Username, TypingTTL); err != nil {
+			c.Logger.Error("failed to set typing key", "error", err)
+			return
+		}
+
+	case ws.EventTypeTypingStop:
+		if err := c.Hub.Cache.Del(ctx, key); err != nil {
+			c.Logger.Error("failed to delete typing key", "error", err)
+			return
+		}
+	}
+
+	c.Hub.broadcastTypingUpdate(c.RoomID)
+}
+
+func (h *Hub) broadcastTypingUpdate(roomID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pattern := fmt.Sprintf("typing:%s:*", roomID)
+	keys, err := h.Cache.Keys(ctx, pattern)
+	if err != nil {
+		h.Logger.Error("failed to fetch typing keys", "error", err)
+		return
+	}
+
+	usernames := make([]string, 0, len(keys))
+	for _, key := range keys {
+		username, err := h.Cache.Get(ctx, key)
+		if err != nil {
+			continue
+		}
+		usernames = append(usernames, username)
+	}
+
+	payload, err := json.Marshal(ws.TypingUpdatePayload{TypingUsers: usernames})
+	if err != nil {
+		h.Logger.Error("failed to marshal typing update", "error", err)
+		return
+	}
+
+	h.Broadcast <- ws.Event{
+		Type:    ws.EventTypeTypingUpdate,
+		RoomID:  roomID,
+		Payload: payload,
+		SentAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
 func (c *Client) WriteRoutine() {
 	ticker := time.NewTicker(PingInterval)
 	defer ticker.Stop()
 loop:
 	for {
 		select {
-		case message, ok := <-c.receivedMessages:
+		case message, ok := <-c.ReceivedMessages:
 			if !ok {
 				break loop
 			}
@@ -315,7 +374,7 @@ func (c *Client) SendHistory(messages []repository.StoredMessage) {
 			c.Logger.Error("failed to marshal history message", "error", err)
 			continue
 		}
-		c.receivedMessages <- ws.Event{
+		c.ReceivedMessages <- ws.Event{
 			ID:      "", // need to fix this later
 			Seq:     0,  // need to fix this later
 			RoomID:  c.RoomID,

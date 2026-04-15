@@ -11,12 +11,12 @@ services:
       retries: 5
   postgres:
     image: postgres:16
-    env_file:
-      - ./backend/.env
-    # environment:
-    #   POSTGRES_USER: ${{ vars.DB_USER }}
-    #   POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
-    #   POSTGRES_DB: ${{ vars.DB_NAME }}
+    # env_file:
+    #   - ./backend/.env
+    environment:
+      POSTGRES_USER: ${{ vars.DB_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      POSTGRES_DB: ${{ vars.DB_NAME }}
     ports:
       - "5432:5432"
     volumes:
@@ -27,17 +27,18 @@ services:
       timeout: 5s
       retries: 5
   app:
-    env_file:
-      - ./backend/.env
-    # environment:
-    #   LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-    #   DB_HOST: ${{ vars.DB_HOST }}
-    #   DB_PORT: ${{ vars.DB_PORT }}
-    #   DB_USER: ${{ vars.DB_USER }}
-    #   POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
-    #   DB_NAME: ${{ vars.DB_NAME }}
-    #   SERVER_ADDRESS: ${{ vars.SERVER_ADDRESS }}
-    #   JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    # env_file:
+    #   - ./backend/.env
+    environment:
+      LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+      DB_HOST: ${{ vars.DB_HOST }}
+      DB_PORT: ${{ vars.DB_PORT }}
+      DB_USER: ${{ vars.DB_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ vars.DB_NAME }}
+      SERVER_ADDRESS: ${{ vars.SERVER_ADDRESS }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      REDIS_ADDR: redis:6379
     build:
       context: .
       dockerfile: Dockerfile

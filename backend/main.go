@@ -54,7 +54,12 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	roomRepo := repository.NewRoomRepository(db)
 	roomMemberRepo := repository.NewRoomMemberRepo(db)
-	hub := hub.NewHub(msgRepo, redisClient, slog.Default().With("component", "hub"))
+	hub, err := hub.NewHub(msgRepo, redisClient, slog.Default().With("component", "hub"))
+	if err != nil {
+		slog.Error("failed to create hub", "error", err)
+		os.Exit(1)
+	}
+	go hub.Run()
 
 	// prometheus.MustRegister(httpRequests)
 	// prometheus.MustRegister(NewActiveConnectionsMetric(hub))

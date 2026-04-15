@@ -226,7 +226,7 @@ func WebSocket(w http.ResponseWriter, r *http.Request, h *hub.Hub, roomRepo repo
 		return
 	}
 
-	client := hub.NewClient(conn, h, claims.Username, claims.UserID, roomID, slog.Default().With("component", "client"))
+	client := hub.NewClient(conn, h, claims.Username, roomID, claims.UserID, slog.Default().With("component", "client"))
 	h.Join(client)
 
 	go client.ReadRoutine()

@@ -17,6 +17,7 @@ type Client interface {
 	Exists(ctx context.Context, keys ...string) (int64, error)
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 	Incr(ctx context.Context, key string) (int64, error)
+	Keys(ctx context.Context, pattern string) ([]string, error) // TODO: replace with SCAN
 }
 
 type redisClient struct {
@@ -58,4 +59,8 @@ func (c *redisClient) Expire(ctx context.Context, key string, ttl time.Duration)
 
 func (c *redisClient) Incr(ctx context.Context, key string) (int64, error) {
 	return c.rdb.Incr(ctx, key).Result()
+}
+
+func (c *redisClient) Keys(ctx context.Context, pattern string) ([]string, error) {
+	return c.rdb.Keys(ctx, pattern).Result()
 }
