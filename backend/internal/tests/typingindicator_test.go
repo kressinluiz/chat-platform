@@ -23,8 +23,6 @@ func CreateTypingEventFromClient(roomID string) ws.Event {
 }
 
 func TestTypingIndicator_Success(t *testing.T) {
-	time.Sleep(50 * time.Millisecond)
-
 	testHub, err := NewTestHub()
 	if err != nil {
 		t.Errorf("failed to create test hub %v", err)
@@ -67,7 +65,6 @@ func TestTypingIndicator_Success(t *testing.T) {
 			}
 
 			if len(payload.TypingUsers) == 3 {
-				t.Log("typing users:", payload.TypingUsers)
 				return
 			}
 		default:

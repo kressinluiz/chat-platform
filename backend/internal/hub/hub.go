@@ -28,6 +28,7 @@ type Hub struct {
 	unregister     chan *Client
 	Logger         *slog.Logger
 	MsgRepo        repository.MessageRepo
+	ReactionRepo   repository.ReactionRepo
 	ClientsCounter atomic.Int64
 	Cache          cache.Client
 	LocalSeq       atomic.Int64
@@ -59,18 +60,19 @@ type MessageContent struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-func NewHub(msgRepo repository.MessageRepo, redisClient cache.Client, logger *slog.Logger) (*Hub, error) {
+func NewHub(msgRepo repository.MessageRepo, reactionRepo repository.ReactionRepo, redisClient cache.Client, logger *slog.Logger) (*Hub, error) {
 	if redisClient == nil {
 		return nil, fmt.Errorf("redis client cannot be nil")
 	}
 	hub := Hub{
-		Rooms:      make(map[string]map[*Client]bool),
-		Broadcast:  make(chan ws.Event),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		Logger:     logger,
-		MsgRepo:    msgRepo,
-		Cache:      redisClient,
+		Rooms:        make(map[string]map[*Client]bool),
+		Broadcast:    make(chan ws.Event),
+		register:     make(chan *Client),
+		unregister:   make(chan *Client),
+		Logger:       logger,
+		MsgRepo:      msgRepo,
+		ReactionRepo: reactionRepo,
+		Cache:        redisClient,
 	}
 	return &hub, nil
 }
@@ -158,93 +160,27 @@ func NewClient(conn *websocket.Conn, hub *Hub, username, roomID, userID string, 
 }
 
 func (c *Client) ReadRoutine() {
-	c.Conn.SetReadLimit(MessageSizeLimit)
-	if err := c.Conn.SetReadDeadline(time.Now().Add(DeadlineInterval)); err != nil {
-		c.Logger.Error("failed to set read deadline", "error", err)
-	}
-	c.Conn.SetPongHandler(func(appData string) error {
-		if err := c.Conn.SetReadDeadline(time.Now().Add(DeadlineInterval)); err != nil {
-			c.Logger.Error("failed to set read deadline", "error", err)
-		}
-		return nil
-	})
-
+	c.SetConnectionLimits()
 	c.Logger.Info("client connected")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	history, err := c.Hub.MsgRepo.GetHistory(ctx, c.RoomID, HistoryLimit)
-	if err != nil {
-		c.Logger.Error("failed to load message history", "error", err)
-	} else {
-		c.SendHistory(history)
-	}
+	c.SendRoomHistory()
 
 	for {
-		_, content, err := c.Conn.ReadMessage()
+		content, err := c.ReadMessageFromClient()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				c.Logger.Error("unexpected close error", "error", err)
-			} else {
-				c.Logger.Info("client disconnected", "error", err)
-			}
 			break
 		}
-
-		var event ws.Event
-		err = json.Unmarshal(content, &event)
+		event, err := c.UnmarshalEventFromClient(content)
 		if err != nil {
-			c.Logger.Warn("failed to unmarshal event", "error", err)
 			continue
 		}
-
-		event.RoomID = c.RoomID
-		event.SentAt = time.Now().UTC().Format(time.RFC3339)
-		event.Seq = c.Hub.nextSeq(c.RoomID)
-
 		switch event.Type {
 		case ws.EventTypeSendMessage:
-			var payload ws.SendMessagePayload
-			err = json.Unmarshal(event.Payload, &payload)
-			if err != nil {
-				c.Logger.Warn("failed to unmarshal message", "error", err)
-				continue
-			}
-
-			content, err = json.Marshal(payload)
-			outboundPayload := ws.NewMessagePayload{
-				UserID:    c.UserID,
-				RoomID:    c.RoomID,
-				Username:  c.Username,
-				Content:   payload.Content,
-				ParentID:  payload.ParentID,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-			}
-			data, err := json.Marshal(outboundPayload)
-			if err != nil {
-				c.Logger.Error("failed to marshal outbound payload", "error", err)
-				continue
-			}
-			message := ws.Event{
-				ID:      event.ID,
-				Type:    ws.EventTypeNewMessage,
-				RoomID:  c.RoomID,
-				Seq:     event.Seq,
-				Payload: data,
-				SentAt:  event.SentAt,
-			}
-			c.Hub.Broadcast <- message
-			go func(roomID, userID, content string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-
-				if err := c.Hub.MsgRepo.Save(ctx, roomID, userID, content); err != nil {
-					c.Hub.Logger.Error("failed to save message", "error", err)
-				}
-			}(c.RoomID, c.UserID, payload.Content)
+			c.handleNewMessageFromClient(event)
 		case ws.EventTypeDeliveryAck:
 		case ws.EventTypeTypingStart, ws.EventTypeTypingStop:
 			c.HandleTyping(event)
+		case ws.EventTypeReaction:
+			c.HandleReaction(event)
 		default:
 			c.Logger.Warn("unknown event type", "type", event.Type)
 			continue
@@ -255,29 +191,6 @@ func (c *Client) ReadRoutine() {
 	if err := c.Conn.Close(); err != nil {
 		c.Logger.Error("failed to close connection", "error", err)
 	}
-}
-
-func (c *Client) HandleTyping(event ws.Event) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	key := fmt.Sprintf("typing:%s:%s", c.RoomID, c.UserID)
-
-	switch event.Type {
-	case ws.EventTypeTypingStart:
-		if err := c.Hub.Cache.Set(ctx, key, c.Username, TypingTTL); err != nil {
-			c.Logger.Error("failed to set typing key", "error", err)
-			return
-		}
-
-	case ws.EventTypeTypingStop:
-		if err := c.Hub.Cache.Del(ctx, key); err != nil {
-			c.Logger.Error("failed to delete typing key", "error", err)
-			return
-		}
-	}
-
-	c.Hub.broadcastTypingUpdate(c.RoomID)
 }
 
 func (h *Hub) broadcastTypingUpdate(roomID string) {
@@ -382,5 +295,167 @@ func (c *Client) SendHistory(messages []repository.StoredMessage) {
 			Payload: content,
 			SentAt:  time.Now().Format(time.RFC3339),
 		}
+	}
+}
+
+func (c *Client) HandleTyping(event ws.Event) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	key := fmt.Sprintf("typing:%s:%s", c.RoomID, c.UserID)
+
+	switch event.Type {
+	case ws.EventTypeTypingStart:
+		if err := c.Hub.Cache.Set(ctx, key, c.Username, TypingTTL); err != nil {
+			c.Logger.Error("failed to set typing key", "error", err)
+			return
+		}
+
+	case ws.EventTypeTypingStop:
+		if err := c.Hub.Cache.Del(ctx, key); err != nil {
+			c.Logger.Error("failed to delete typing key", "error", err)
+			return
+		}
+	}
+
+	c.Hub.broadcastTypingUpdate(c.RoomID)
+}
+
+func (c *Client) HandleReaction(event ws.Event) {
+	var payload ws.ReactionPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		c.Logger.Warn("failed to unmarshal reaction payload", "error", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := c.Hub.ReactionRepo.Toggle(ctx, payload.MessageID, c.UserID, payload.Emoji)
+	if err != nil {
+		c.Logger.Error("failed to toggle reaction", "error", err)
+		return
+	}
+
+	reactions, err := c.Hub.ReactionRepo.GetForMessage(ctx, payload.MessageID)
+	if err != nil {
+		c.Logger.Error("failed to get reactions", "error", err)
+		return
+	}
+
+	reactionMap := make(map[string][]string)
+	for _, r := range reactions {
+		reactionMap[r.Emoji] = append(reactionMap[r.Emoji], r.UserID)
+	}
+
+	outboundPayload, err := json.Marshal(ws.ReactionUpdatePayload{
+		MessageID: payload.MessageID,
+		Reactions: reactionMap,
+	})
+	if err != nil {
+		c.Logger.Error("failed to marshal reaction update", "error", err)
+		return
+	}
+
+	c.Hub.Broadcast <- ws.Event{
+		ID:      event.ID,
+		Type:    ws.EventTypeReaction,
+		RoomID:  c.RoomID,
+		Seq:     event.Seq,
+		Payload: outboundPayload,
+		SentAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func (c *Client) handleNewMessageFromClient(event ws.Event) {
+	var payload ws.SendMessagePayload
+	err := json.Unmarshal(event.Payload, &payload)
+	if err != nil {
+		c.Logger.Warn("failed to unmarshal message", "error", err)
+		return
+	}
+
+	outboundPayload := ws.NewMessagePayload{
+		UserID:    c.UserID,
+		RoomID:    c.RoomID,
+		Username:  c.Username,
+		Content:   payload.Content,
+		ParentID:  payload.ParentID,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(outboundPayload)
+	if err != nil {
+		c.Logger.Error("failed to marshal outbound payload", "error", err)
+		return
+	}
+	message := ws.Event{
+		ID:      event.ID,
+		Type:    ws.EventTypeNewMessage,
+		RoomID:  c.RoomID,
+		Seq:     event.Seq,
+		Payload: data,
+		SentAt:  event.SentAt,
+	}
+	c.Hub.Broadcast <- message
+	go func(roomID, userID, content string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := c.Hub.MsgRepo.Save(ctx, roomID, userID, content); err != nil {
+			c.Hub.Logger.Error("failed to save message", "error", err)
+		}
+	}(c.RoomID, c.UserID, payload.Content)
+}
+
+func (c *Client) ReadMessageFromClient() ([]byte, error) {
+	_, content, err := c.Conn.ReadMessage()
+	if err != nil {
+		if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+			c.Logger.Error("unexpected close error", "error", err)
+		} else {
+			c.Logger.Info("client disconnected", "error", err)
+		}
+		return nil, err
+	}
+
+	return content, nil
+}
+
+func (c *Client) UnmarshalEventFromClient(content []byte) (ws.Event, error) {
+	var event ws.Event
+	err := json.Unmarshal(content, &event)
+	if err != nil {
+		c.Logger.Warn("failed to unmarshal event", "error", err)
+		return event, err
+	}
+
+	event.RoomID = c.RoomID
+	event.SentAt = time.Now().UTC().Format(time.RFC3339)
+	event.Seq = c.Hub.nextSeq(c.RoomID)
+
+	return event, nil
+}
+
+func (c *Client) SetConnectionLimits() {
+	c.Conn.SetReadLimit(MessageSizeLimit)
+	if err := c.Conn.SetReadDeadline(time.Now().Add(DeadlineInterval)); err != nil {
+		c.Logger.Error("failed to set read deadline", "error", err)
+	}
+	c.Conn.SetPongHandler(func(appData string) error {
+		if err := c.Conn.SetReadDeadline(time.Now().Add(DeadlineInterval)); err != nil {
+			c.Logger.Error("failed to set read deadline", "error", err)
+		}
+		return nil
+	})
+}
+
+func (c *Client) SendRoomHistory() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	history, err := c.Hub.MsgRepo.GetHistory(ctx, c.RoomID, HistoryLimit)
+	if err != nil {
+		c.Logger.Error("failed to load message history", "error", err)
+	} else {
+		c.SendHistory(history)
 	}
 }

@@ -51,10 +51,11 @@ func main() {
 		}
 	}()
 	msgRepo := repository.NewMessageRepository(db)
+	reactionRepo := repository.NewReactionRepo(db)
 	userRepo := repository.NewUserRepository(db)
 	roomRepo := repository.NewRoomRepository(db)
 	roomMemberRepo := repository.NewRoomMemberRepo(db)
-	hub, err := hub.NewHub(msgRepo, redisClient, slog.Default().With("component", "hub"))
+	hub, err := hub.NewHub(msgRepo, reactionRepo, redisClient, slog.Default().With("component", "hub"))
 	if err != nil {
 		slog.Error("failed to create hub", "error", err)
 		os.Exit(1)

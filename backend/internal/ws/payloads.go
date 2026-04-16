@@ -51,3 +51,13 @@ type ErrorPayload struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+type ReactionPayload struct {
+	MessageID string `json:"message_id"`
+	Emoji     string `json:"emoji"`
+}
+
+type ReactionUpdatePayload struct {
+	MessageID string              `json:"message_id"`
+	Reactions map[string][]string `json:"reactions"` // map[emoji][]userID
+}

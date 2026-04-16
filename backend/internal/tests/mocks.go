@@ -101,6 +101,55 @@ type MockMessageRepository struct {
 	saved []SavedMessage
 }
 
+type MockReactionRepo struct {
+	mu   sync.RWMutex
+	data map[string][]repository.Reaction
+}
+
+func NewMockReactionRepo() *MockReactionRepo {
+	return &MockReactionRepo{
+		data: make(map[string][]repository.Reaction),
+	}
+}
+
+func (m *MockReactionRepo) Toggle(ctx context.Context, messageID, userID, emoji string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	reactions := m.data[messageID]
+
+	for i, r := range reactions {
+		if r.UserID == userID && r.Emoji == emoji {
+			reactions[i] = reactions[len(reactions)-1]
+			reactions = reactions[:len(reactions)-1]
+			m.data[messageID] = reactions
+			return false, nil
+		}
+	}
+
+	newReaction := repository.Reaction{
+		MessageID: messageID,
+		UserID:    userID,
+		Emoji:     emoji,
+		CreatedAt: time.Now(),
+	}
+
+	m.data[messageID] = append(reactions, newReaction)
+	return true, nil
+}
+
+func (m *MockReactionRepo) GetForMessage(ctx context.Context, messageID string) ([]repository.Reaction, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	reactions := m.data[messageID]
+
+	out := make([]repository.Reaction, len(reactions))
+	copy(out, reactions)
+
+	return out, nil
+}
+
 func (mock *MockMessageRepository) Save(ctx context.Context, roomID, userID, content string) error {
 	slog.Info("mock.Save")
 	mock.mu.Lock()
@@ -120,7 +169,8 @@ func NoopLogger() *slog.Logger {
 func NewTestHub() (*hub.Hub, error) {
 	mock := &MockMessageRepository{}
 	redisClient := NewMockRedisClient()
-	hub, err := hub.NewHub(mock, redisClient, NoopLogger())
+	mockReactions := NewMockReactionRepo()
+	hub, err := hub.NewHub(mock, mockReactions, redisClient, NoopLogger())
 	return hub, err
 }
 
